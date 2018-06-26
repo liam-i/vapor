@@ -1,14 +1,55 @@
-import HTTP
+/// Default implementation of `AbortError`. You can use this as a convenient method for throwing
+/// `AbortError`s without having to conform your own error-type to `AbortError`.
+///
+///     throw Abort(.badRequest, reason: "Something's not quite right...")
+///
+public struct Abort: AbortError {
+    /// Creates a redirecting `Abort` error.
+    ///
+    ///     throw Abort.redirect(to: "https://vapor.codes")"
+    ///
+    /// Set type to '.permanently' to allow caching to automatically redirect from browsers.
+    /// Defaulting to non-permanent to prevent unexpected caching.
+    public static func redirect(to location: String, type: RedirectType = .normal) -> Abort {
+        var headers: HTTPHeaders = [:]
+        headers.replaceOrAdd(name: .location, value: location)
+        return .init(type.status, headers: headers)
+    }
 
-/**
-    A handful of standard errors that can be thrown
-    in any Vapor closure by calling `throw Abort.<case>`.
-    These errors can be caught in Middleware to give
-    a desired response.
-*/
-public enum Abort: Swift.Error {
-    case badRequest
-    case notFound
-    case serverError
-    case custom(status: Status, message: String)
+    /// See `Debuggable`
+    public var identifier: String
+
+    /// See `AbortError`
+    public var status: HTTPResponseStatus
+
+    /// See `AbortError`.
+    public var headers: HTTPHeaders
+
+    /// See `AbortError`
+    public var reason: String
+
+    /// See `Debuggable`
+    public var sourceLocation: SourceLocation?
+
+    /// See `Debuggable`
+    public var stackTrace: [String]
+
+    /// Create a new `Abort`, capturing current source location info.
+    public init(
+        _ status: HTTPResponseStatus,
+        headers: HTTPHeaders = [:],
+        reason: String? = nil,
+        identifier: String? = nil,
+        file: String = #file,
+        function: String = #function,
+        line: UInt = #line,
+        column: UInt = #column
+    ) {
+        self.identifier = status.code.description
+        self.headers = headers
+        self.status = status
+        self.reason = reason ?? status.reasonPhrase
+        self.sourceLocation = SourceLocation(file: file, function: function, line: line, column: column, range: nil)
+        self.stackTrace = Abort.makeStackTrace()
+    }
 }

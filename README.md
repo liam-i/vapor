@@ -1,67 +1,53 @@
-[![Vapor](https://cloud.githubusercontent.com/assets/1342803/15592871/46decfda-2375-11e6-9494-a9bf4e6aaebf.png)](http://vapor.team)
+[![Vapor](https://user-images.githubusercontent.com/1342803/36581122-643e5298-1839-11e8-8927-522bdc3a7205.png)](http://vapor.team)
 
-# Vapor
+<p align="center">
+	<a href="https://docs.vapor.codes/3.0/">
+        <img src="http://img.shields.io/badge/read_the-docs-2196f3.svg" alt="Documentation">
+    </a>
+    <a href="https://discord.gg/vapor">
+        <img src="https://img.shields.io/discord/431917998102675485.svg" alt="Team Chat">
+    </a>
+    <a href="LICENSE">
+        <img src="https://img.shields.io/badge/license-MIT-brightgreen.svg" alt="MIT License">
+    </a>
+    <a href="https://circleci.com/gh/vapor/vapor">
+        <img src="https://img.shields.io/badge/build-passing-brightgreen.svg" alt="Continuous Integration">
+    </a>
+    <a href="https://swift.org">
+        <img src="https://img.shields.io/badge/swift-4.1-brightgreen.svg" alt="Swift 4.1">
+    </a>
+    <a href="https://twitter.com/codevapor">
+        <img src="https://img.shields.io/badge/twitter-codevapor-5AA9E7.svg" alt="Twitter">
+    </a>
+</p>
 
-![Swift](http://img.shields.io/badge/swift-3.0-brightgreen.svg)
-[![Build Status](https://api.travis-ci.org/vapor/vapor.svg?branch=master)](https://travis-ci.org/vapor/vapor)
-[![CircleCI](https://circleci.com/gh/vapor/vapor.svg?style=shield)](https://circleci.com/gh/vapor/vapor)
-[![Code Coverage](https://codecov.io/gh/vapor/vapor/branch/master/graph/badge.svg)](https://codecov.io/gh/vapor/vapor)
-[![Codebeat](https://codebeat.co/badges/a793ad97-47e3-40d9-82cf-2aafc516ef4e)](https://codebeat.co/projects/github-com-vapor-vapor)
-[![Slack Status](http://vapor.team/badge.svg)](http://slack.qutheory.io)
-[![Twitter Follow](https://img.shields.io/twitter/follow/shields_io.svg?style=social&label=Follow&maxAge=2592000)](https://twitter.com/codevapor)
+<br>
 
-Vapor is the [most used](https://swiftpkgs.ng.bluemix.net/browse?chart=mostessential) web framework for Swift. It provides a beautifully expressive and easy to use foundation for your next website, API, or cloud project.
+Vapor is a web framework for Swift. It provides a beautifully expressive and easy to use foundation for your next website, API, or cloud project.
 
-This repository is the framework's source code. To view some sample projects, check out our list [here](/Documents/PROJECTS.md).
+Take a look at some of the [awesome stuff](https://github.com/Cellane/awesome-vapor) created with Vapor.
 
-## 📖 Documentation
+### 💧 Community
 
-Visit the Vapor web framework's [documentation](http://docs.vapor.codes) for instructions on how to use this package.
+Join the welcoming community of fellow Vapor developers on [Discord](http://vapor.team).
 
-## 💧 Community
+### 🚀 Contributing
 
-Join the welcoming community of fellow Vapor developers in [slack](http://vapor.team).
+To contribute a **feature or idea** to Vapor, [create an issue](https://github.com/vapor/vapor/issues/new) explaining your idea or bring it up on [Discord](http://vapor.team).
 
-## 🔧 Compatibility
+If you find a **bug**, please [create an issue](https://github.com/vapor/vapor/issues/new). 
 
-This package has been tested on macOS and Ubuntu.
+If you find a **security vulnerability**, please contact [security@vapor.codes](mailto:security@vapor.codes) as soon as possible.
 
-## 🦄 Deploy
+### 💙 Code of Conduct
 
-Vapor can be deployed wherever Swift can.
+Our goal is to create a safe and empowering environment for anyone who decides to use or contribute to Vapor. Please help us make the community a better place by abiding to this [Code of Conduct](https://github.com/vapor/vapor/blob/master/Docs/code_of_conduct.md) during your interactions surrounding this project.
 
-- Digital Ocean
-- Docker
-- Heroku
-- AWS
-- Bluemix
-- More ...
-
-[![Deploy](https://www.herokucdn.com/deploy/button.svg)](https://heroku.com/deploy?template=https://github.com/vapor/example/tree/master)
-
-## 🚀 Contributing
-
-All developers should feel welcome and encouraged to contribute to Vapor, see our [getting started](/Documents/CONTRIBUTING.md) document here to get involved.
-
-To contribute a **feature or idea** to Vapor, submit an issue and fill in the template. If the request is approved, you or one of the members of the community can start working on it.
-
-If you find a **bug**, please submit a pull request with a failing test case displaying the bug or create an issue.
-
-If you find a **security vulnerability**, please contact [tanner@qutheory.io](mailto:tanner@qutheory.io) as soon as possible. We take these matters seriously.
-
-## 💙 Code of Conduct
-
-Our goal is to create a safe and empowering environment for anyone who decides to use or contribute to Vapor. Please help us make the community a better place by abiding to this [Code of Conduct](/Documents/CODE_OF_CONDUCT.md) during your interactions surrounding this project.
-
-## ⭐ Projects
-
-Vapor has [several projects](/Documents/PROJECTS.md) that are live now in the cloud. Most are also open source, so check them out for great examples.
-
-## 🏫 Tutorials
+### 🏫 Tutorials
 
 The awesome Vapor community is always adding new tutorials and articles out there, [Vapor University](http://vapor.university) is a great place to get started!
 
-## Backers
+### 👥 Backers
 
 Support us with a monthly donation and help us continue our activities. [[Become a backer](https://opencollective.com/vapor#backer)]
 
@@ -97,14 +83,31 @@ Support us with a monthly donation and help us continue our activities. [[Become
 <a href="https://opencollective.com/vapor/backer/29/website" target="_blank"><img src="https://opencollective.com/vapor/backer/29/avatar.svg"></a>
 
 
-## Sponsors
+### 🥇 Sponsors
 
-Proudly sponsored by Nodes
+Proudly sponsored by [Nodes](http://nodesagency.com) (🏅), [Skelpo](https://www.skelpo.com) (🥉), and our [Open Collective sponsors](https://opencollective.com/vapor#sponsor).
 
-[![Nodes](http://vapor.codes/images/nodes.png)](http://nodesagency.com)
+- 🥇 Become a [Gold sponsor](mailto:sponsor@vapor.codes)
+- 🥈 Become a [Silver sponsor](mailto:sponsor@vapor.codes)
+- 🥉 Become a [Bronze sponsor](mailto:sponsor@vapor.codes)
+- 👥 [Contribute on Open Collective](https://opencollective.com/vapor#sponsor)
 
-Become a sponsor and get your logo on our README on Github with a link to your site. [[Become a sponsor](https://opencollective.com/vapor#sponsor)]
+<a href="http://nodesagency.com">
+    <img src="https://cloud.githubusercontent.com/assets/5750489/21993104/2e0db68a-dbe7-11e6-9402-35f9f04743a7.png" width="320" alt="Nodes">
+</a>
 
+<br>
+
+<a href="https://www.skelpo.com">
+    <img src="https://user-images.githubusercontent.com/1342803/34183530-43ded348-e4e9-11e7-9fe3-c513b1f02ef9.png" width="320" alt="Skelpo">
+</a>
+
+<br>
+<br>
+
+<a href="http://dominickm.com" target="_blank">
+    <img width="64px" src="https://opencollective.com/proxy/images/?src=https%3A%2F%2Fopencollective-production.s3-us-west-1.amazonaws.com%2Fd0eaeb81cc9440518ad8457cfcdba0d0_965d9960-82ca-11e6-a262-73c13d37e1af.jpeg" alt="Michael Dominick">
+</a>
 <a href="https://opencollective.com/vapor/sponsor/0/website" target="_blank"><img src="https://opencollective.com/vapor/sponsor/0/avatar.svg"></a>
 <a href="https://opencollective.com/vapor/sponsor/1/website" target="_blank"><img src="https://opencollective.com/vapor/sponsor/1/avatar.svg"></a>
 <a href="https://opencollective.com/vapor/sponsor/2/website" target="_blank"><img src="https://opencollective.com/vapor/sponsor/2/avatar.svg"></a>
@@ -135,3 +138,5 @@ Become a sponsor and get your logo on our README on Github with a link to your s
 <a href="https://opencollective.com/vapor/sponsor/27/website" target="_blank"><img src="https://opencollective.com/vapor/sponsor/27/avatar.svg"></a>
 <a href="https://opencollective.com/vapor/sponsor/28/website" target="_blank"><img src="https://opencollective.com/vapor/sponsor/28/avatar.svg"></a>
 <a href="https://opencollective.com/vapor/sponsor/29/website" target="_blank"><img src="https://opencollective.com/vapor/sponsor/29/avatar.svg"></a>
+
+[![analytics](http://www.google-analytics.com/collect?v=1&t=pageview&_s=1&dl=https%3A%2F%2Fgithub.com%2Fvapor%2Fvapor&_u=MAC~&cid=1757014354.1393964045&tid=UA-76177358-6)]()
