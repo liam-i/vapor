@@ -1,118 +1,63 @@
-/// Stores configured `HTTPMessage` and `Data` coders.
-///
-/// Use the `require...` methods to fetch coders by `MediaType`.
-public struct ContentCoders: ServiceType {
-    /// See `ServiceType`.
-    public static func makeService(for worker: Container) throws -> ContentCoders {
-        return try worker.make(ContentConfig.self).resolve(on: worker)
+import Foundation
+import NIOCore
+import NIOHTTP1
+
+/// Conform a type to this protocol to make it usable for encoding data via Vapor's ``ContentConfiguration`` system.
+public protocol ContentEncoder {
+    /// Legacy "encode object" method. The provided encodable object's contents must be stored in the provided
+    /// ``NIOCore/ByteBuffer``, and any appropriate headers for the type of the content may be stored in the provided
+    /// ``NIOHTTP1/HTTPHeaders``.
+    ///
+    /// Most encoders should implement this method by simply forwarding it to the encoder userInfo-aware version below,
+    /// e.g. `try self.encode(encodable, to: &body, headers: &headers, userInfo: [:])`. For legacy API compatibility
+    /// reasons, the default protocol conformance will do the exact opposite.
+    func encode<E>(_ encodable: E, to body: inout ByteBuffer, headers: inout HTTPHeaders) throws
+        where E: Encodable
+
+    /// "Encode object" method. The provided encodable object's contents must be stored in the provided
+    /// ``NIOCore/ByteBuffer``, and any appropriate headers for the type of the content may be stored in the provided
+    /// ``NIOHTTP1/HTTPHeaders`` objects. The provided ``userInfo`` dictionary must be forwarded to the underlying
+    /// ``Swift/Encoder`` used to perform the encoding operation.
+    ///
+    /// For legacy API compatibility reasons, the default protocol conformance for this method forwards it to the legacy
+    /// encode method.
+    func encode<E>(_ encodable: E, to body: inout ByteBuffer, headers: inout HTTPHeaders, userInfo: [CodingUserInfoKey: Any]) throws
+        where E: Encodable
+}
+
+/// Conform a type to this protocol to make it usable for decoding data via Vapor's ``ContentConfiguration`` system.
+public protocol ContentDecoder {
+    /// Legacy "decode object" method. The provided ``NIOCore/ByteBuffer`` should be decoded as a vaule of the given
+    /// type, optionally guided by the provided ``NIOHTTP1/HTTPHeaders``.
+    ///
+    /// Most decoders should implement this method by simply forwarding it to the decoder userInfo-aware version below,
+    /// e.g. `try self.decode(D.self, from: body, headers: headers, userInfo: [:])`. For legacy API compatibility
+    /// reasons, the default protocol conformance will do the exact opposite.
+    func decode<D>(_ decodable: D.Type, from body: ByteBuffer, headers: HTTPHeaders) throws -> D
+        where D: Decodable
+
+    /// "Decode object" method. The provided ``NIOCore/ByteBuffer`` should be decoded as a vaule of the given type,
+    /// optionally guided by the provided ``NIOHTTP1/HTTPHeaders``. The provided ``userInfo`` dictionary must be
+    /// forwarded to the underlying ``Swift/Decoder`` used to perform the decoding operation.
+    ///
+    /// For legacy API compatibility reasons, the default protocol conformance for this method forwards it to the legacy
+    /// decode method.
+    func decode<D>(_ decodable: D.Type, from body: ByteBuffer, headers: HTTPHeaders, userInfo: [CodingUserInfoKey: Any]) throws -> D
+        where D: Decodable
+}
+
+extension ContentEncoder {
+    public func encode<E>(_ encodable: E, to body: inout ByteBuffer, headers: inout HTTPHeaders, userInfo: [CodingUserInfoKey: Any]) throws
+        where E: Encodable
+    {
+        try self.encode(encodable, to: &body, headers: &headers)
     }
+}
 
-    /// Configured `HTTPMessageEncoder`s.
-    private let httpEncoders: [MediaType: HTTPMessageEncoder]
-
-    /// Configured `HTTPMessageDecoder`s.
-    private var httpDecoders: [MediaType: HTTPMessageDecoder]
-
-    /// Configured `DataEncoder`s.
-    private var dataEncoders: [MediaType: DataEncoder]
-
-    /// Configured `DataDecoder`s.
-    private var dataDecoders: [MediaType: DataDecoder]
-
-    /// Internal init for creating a `ContentCoders`.
-    internal init(
-        httpEncoders: [MediaType: HTTPMessageEncoder],
-        httpDecoders: [MediaType: HTTPMessageDecoder],
-        dataEncoders: [MediaType: DataEncoder],
-        dataDecoders: [MediaType: DataDecoder]
-    ) {
-        self.httpEncoders = httpEncoders
-        self.httpDecoders = httpDecoders
-        self.dataEncoders = dataEncoders
-        self.dataDecoders = dataDecoders
-    }
-
-    /// Returns an `HTTPMessageEncoder` for the specified `MediaType` or throws an error.
-    ///
-    ///     let coder = try coders.requireHTTPEncoder(for: .json)
-    ///
-    /// - parameters:
-    ///     - mediaType: An encoder for this `MediaType` will be returned.
-    public func requireHTTPEncoder(for mediaType: MediaType) throws -> HTTPMessageEncoder {
-        guard let encoder = httpEncoders[mediaType] else {
-            throw VaporError(
-                identifier: "httpEncoder",
-                reason: "There is no configured `HTTPMessageEncoder` encoder for content type: \(mediaType).",
-                suggestedFixes: [
-                    "Register an `HTTPMessageEncoder` using `ContentConfig`.",
-                    "Use one of the encoding methods that accepts a custom encoder."
-                ]
-            )
-        }
-
-        return encoder
-    }
-
-    /// Returns a `HTTPMessageDecoder` for the specified `MediaType` or throws an error.
-    ///
-    ///     let coder = try coders.requireHTTPDecoder(for: .json)
-    ///
-    /// - parameters:
-    ///     - mediaType: A decoder for this `MediaType` will be returned.
-    public func requireHTTPDecoder(for mediaType: MediaType) throws -> HTTPMessageDecoder {
-        guard let decoder = httpDecoders[mediaType] else {
-            throw VaporError(
-                identifier: "httpDecoder",
-                reason: "There is no configured `HTTPMessageDecoder` for content type: \(mediaType).",
-                suggestedFixes: [
-                    "Register an `HTTPMessageDecoder` using `ContentConfig`.",
-                    "Use one of the decoding methods that accepts a custom decoder."
-                ]
-            )
-        }
-
-        return decoder
-    }
-
-    /// Returns a `DataEncoder` for the specified `MediaType` or throws an error.
-    ///
-    ///     let coder = try coders.requireDataEncoder(for: .json)
-    ///
-    /// - parameters:
-    ///     - mediaType: An encoder for this `MediaType` will be returned.
-    public func requireDataEncoder(for mediaType: MediaType) throws -> DataEncoder {
-        guard let encoder = dataEncoders[mediaType] else {
-            throw VaporError(
-                identifier: "dataEncoder",
-                reason: "There is no configured `DataEncoder` for content type: \(mediaType).",
-                suggestedFixes: [
-                    "Register an `DataEncoder` using `ContentConfig`.",
-                    "Use one of the encoding methods that accepts a custom encoder."
-                ]
-            )
-        }
-
-        return encoder
-    }
-
-    /// Returns a `DataDecoder` for the specified `MediaType` or throws an error.
-    ///
-    ///     let coder = try coders.requireDataDecoder(for: .json)
-    ///
-    /// - parameters:
-    ///     - mediaType: A decoder for this `MediaType` will be returned.
-    public func requireDataDecoder(for mediaType: MediaType) throws -> DataDecoder {
-        guard let decoder = dataDecoders[mediaType] else {
-            throw VaporError(
-                identifier: "dataDecoder",
-                reason: "There is no configured `DataDecoder` for content type: \(mediaType).",
-                suggestedFixes: [
-                    "Register an `DataDecoder` using `ContentConfig`.",
-                    "Use one of the decoding methods that accepts a custom decoder."
-                ]
-            )
-        }
-
-        return decoder
+extension ContentDecoder {
+    public func decode<D>(_ decodable: D.Type, from body: ByteBuffer, headers: HTTPHeaders, userInfo: [CodingUserInfoKey: Any]) throws -> D
+        where D: Decodable
+    {
+        try self.decode(decodable, from: body, headers: headers)
     }
 }

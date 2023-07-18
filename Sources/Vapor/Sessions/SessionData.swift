@@ -1,20 +1,57 @@
-/// Codable session data.
-public struct SessionData: Codable {
-    /// Session codable object storage.
-    internal var storage: [String: String]
+/// A container for storing data associated with a given `SessionID`.
+///
+/// You can add data to an instance of `SessionData` by subscripting:
+///
+///     let data = SessionData()
+///     data["login_date"] = "\(Date())"
+///
+/// If you need a snapshot of the data stored in the container, such as for custom serialization to storage drivers, you can get a copy with `.snapshot`.
+///
+///     let data: SessionData = ["name": "Vapor"]
+///     // creates a copy of the data as of this point
+///     let snapshot = data.snapshot
+///     client.storeUsingDictionary(snapshot)
+public struct SessionData {
+    /// A copy of the current data in the container.
+    public var snapshot: [String: String] { self.storage }
 
-    /// Create a new, empty session data.
-    public init() {
-        storage = [:]
+    private var storage: [String: String]
+    
+    /// Creates a new empty session data container.
+    public init() { self.storage = [:] }
+
+    /// Creates a session data container for the given data.
+    /// - Parameter data: The data to store in the container.
+    public init(initialData data: [String: String]) { self.storage = data }
+
+    public subscript(_ key: String) -> String? {
+        get { return self.storage[key] }
+        set(newValue) { self.storage[key] = newValue }
     }
+}
 
-    /// See `Decodable`.
+// MARK: Equatable
+extension SessionData {
+    public static func ==(lhs: SessionData, rhs: SessionData) -> Bool {
+        return lhs.storage == rhs.storage
+    }
+}
+
+// MARK: Codable
+extension SessionData: Codable {
     public init(from decoder: Decoder) throws {
-        storage = try .init(from: decoder)
+        self.storage = try .init(from: decoder)
     }
 
-    /// See `Encodable`.
     public func encode(to encoder: Encoder) throws {
-        try storage.encode(to: encoder)
+        try self.storage.encode(to: encoder)
+    }
+}
+
+// MARK: ExpressibleByDictionaryLiteral
+extension SessionData: ExpressibleByDictionaryLiteral {
+    public init(dictionaryLiteral elements: (String, String)...) {
+        let storage: [String: String] = elements.reduce(into: [:]) { $0[$1.0] = $1.1 }
+        self.init(initialData: storage)
     }
 }

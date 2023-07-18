@@ -1,341 +1,142 @@
-/// Helper for encoding and decoding `Content` from an HTTP message.
-///
-///     req.content.decode(User.self)
-///
-/// See `Request` and `Response` for more information.
-public struct ContentContainer<M> where M: HTTPMessageContainer {
-    /// The wrapped message container.
-    internal var container: M
+import NIOHTTP1
+import NIOCore
 
-    /// Creates a new `ContentContainer`.
-    internal init(_ container: M) {
-        self.container = container
+public protocol ContentContainer {
+    /// The type of data stored in the container.
+    ///
+    /// This is usually set according to the received data for incoming content.
+    /// For outgoing content, the type is typically specified as part of encoding.
+    var contentType: HTTPMediaType? { get }
+
+    /// Use the provided ``ContentDecoder`` to read a value of type `D` from the container.
+    func decode<D: Decodable>(_: D.Type, using decoder: ContentDecoder) throws -> D
+
+    /// Use the provided ``ContentEncoder`` to write a value of type `E` to the container.
+    mutating func encode<E: Encodable>(_ encodable: E, using encoder: ContentEncoder) throws
+}
+
+extension ContentContainer {
+    // MARK: - Decoding helpers
+
+    /// Use the default decoder for the container's ``contentType`` to read a value of type `D`
+    /// from the container.
+    public func decode<D: Decodable>(_: D.Type) throws -> D {
+        return try self.decode(D.self, using: self.configuredDecoder())
     }
 
-    // MARK: JSON
-
-    /// Serializes an `Encodable` object as JSON to this message.
+    /// Use the default decoder for the container's ``contentType`` to read a value of type `C`
+    /// from the container.
     ///
-    ///     try res.content.encode(json: user)
-    ///
-    /// - parameters:
-    ///     - json: Instance of generic `Encodable` to serialize to this HTTP message.
-    /// - throws: Errors during serialization.
-    public func encode<E>(json: E) throws where E: Encodable {
-        try encode(json, as: .json)
+    /// - Note: The ``Content/defaultContentType-9sljl`` of `C` is ignored.
+    public func decode<C: Content>(_: C.Type) throws -> C {
+        var content = try self.decode(C.self, using: self.configuredDecoder())
+        try content.afterDecode()
+        return content
     }
 
-    /// Serializes an `Encodable` object to this message using a custom `JSONEncoder`.
-    ///
-    ///     try res.content.encode(json: user, using: .custom(format: .prettyPrinted))
-    ///
-    /// See `JSONEncoder.custom(...)` for a convenient way to create a customized instance.
-    ///
-    /// - parameters:
-    ///     - json: Instance of generic `Encodable` to serialize to this HTTP message.
-    ///     - encoder: Specific `JSONEncoder` to use.
-    /// - throws: Errors during serialization.
-    public func encode<E>(json: E, using encoder: JSONEncoder) throws where E: Encodable {
-        try encode(json, using: encoder)
+    /// Use the default configured decoder for the ``contentType`` parameter to read a value
+    /// of type `D` from the container.
+    public func decode<D: Decodable>(_: D.Type, as contentType: HTTPMediaType) throws -> D {
+        try self.decode(D.self, using: self.configuredDecoder(for: contentType))
     }
 
-    /// Parses a `Decodable` type from this HTTP message. This method supports streaming HTTP bodies (chunked) and can run asynchronously
-    /// See `syncDecode(_:)` for the non-streaming, synchronous version.
-    ///
-    ///     let user = req.content.decode(json: User.self, using: .custom(dates: .iso8601))
-    ///     print(user) // Future<User>
-    ///
-    /// This method accepts a custom `JSONDecoder`. See `JSONDecoder.custom(...)` for a convenient way to create a customized instance.
-    ///
-    /// - parameters:
-    ///     - content: `Decodable` type to decode from this HTTP message.
-    ///     - maxSize: Maximum streaming body size to support (does not apply to static bodies).
-    ///     - decoder: Custom `JSONDecoder` to use.
-    /// - returns: Future instance of the `Decodable` type.
-    /// - throws: Any errors making the decoder for this media type or parsing the message.
-    public func decode<D>(json: D.Type, maxSize: Int = 65_536, using decoder: JSONDecoder) throws -> Future<D> where D: Decodable {
-        return try decode(D.self, maxSize: maxSize, using: decoder)
+    // MARK: - Encoding helpers
+
+    /// Serialize a ``Content`` object to the container as its default content type.
+    public mutating func encode<C: Content>(_ content: C) throws {
+        try self.encode(content, as: C.defaultContentType)
     }
 
-    // MARK: Content
-
-    /// Serializes `Content` to this HTTP message. Uses the Content's default media type if none is supplied.
-    ///
-    ///     try req.content.encode(user)
-    ///
-    /// - parameters:
-    ///     - content: Instance of generic `Content` to serialize to this HTTP message.
-    /// - throws: Errors making encoder for the `Content` or errors during serialization.
-    public func encode<C>(_ content: C) throws where C: Content {
-        try encode(content, as: C.defaultContentType)
+    /// Serialize a ``Content`` object to the container as its default content type without copying it.
+    public mutating func encode<C: Content>(_ content: inout C) throws {
+        try self.encode(&content, as: C.defaultContentType)
     }
 
-    /// Serializes an `Encodable` object to this message using specific `MediaType`.
-    ///
-    ///     try req.content.encode(user, as: .json)
-    ///
-    /// - parameters:
-    ///     - encodable: Instance of generic `Encodable` to serialize to this HTTP message.
-    ///     - mediaType: Specific `MediaType` to encode. This will be used to lookup an appropriate encoder from `ContentConfig`.
-    /// - throws: Errors making encoder for the `Content` or errors during serialization.
-    public func encode<E>(_ encodable: E, as mediaType: MediaType) throws where E: Encodable {
-        try encode(encodable, using: requireHTTPEncoder(for: mediaType))
-    }
-
-    /// Serializes an `Encodable` object to this message using specific `HTTPMessageEncoder`.
-    ///
-    ///     try req.content.encode(user, using: JSONEncoder())
-    ///
-    /// - parameters:
-    ///     - encodable: Instance of generic `Encodable` to serialize to this HTTP message.
-    ///     - encoder: Specific `HTTPMessageEncoder` to use.
-    /// - throws: Errors during serialization.
-    public func encode<E>(_ encodable: E, using encoder: HTTPMessageEncoder) throws where E: Encodable {
-        try encoder.encode(encodable, to: &container.http, on: container)
+    /// Serialize a ``Content`` object to the container, specifying an explicit content type.
+    public mutating func encode<C: Content>(_ content: C, as contentType: HTTPMediaType) throws {
+        var content = content
+        try self.encode(&content, as: contentType)
     }
     
-    /// Parses a `Decodable` type from this HTTP message. This method supports streaming HTTP bodies (chunked) and can run asynchronously
-    /// See `syncDecode(_:)` for the non-streaming, synchronous version.
-    ///
-    ///     let user = try req.content.decode(User.self)
-    ///     print(user) // Future<User>
-    ///
-    /// The HTTP message's `MediaType` will be used to lookup the relevant `HTTPBodyDecoder` to use.
-    ///
-    /// - parameters:
-    ///     - content: `Decodable` type to decode from this HTTP message.
-    ///     - maxSize: Maximum streaming body size to support (does not apply to static bodies).
-    /// - returns: Future instance of the `Decodable` type.
-    /// - throws: Any errors making the decoder for this media type or parsing the message.
-    public func decode<D>(_ content: D.Type, maxSize: Int = 65_536) throws -> Future<D> where D: Decodable {
-        return try decode(D.self, maxSize: maxSize, using: requireHTTPDecoder())
+    /// Serialize a ``Content`` object to the container without copying it, specifying an
+    /// explicit content type.
+    public mutating func encode<C: Content>(_ content: inout C, as contentType: HTTPMediaType) throws {
+        try content.beforeEncode()
+        try self.encode(content, using: self.configuredEncoder(for: contentType))
     }
 
-    /// Parses a `Decodable` type from this HTTP message. This method supports streaming HTTP bodies (chunked) and can run asynchronously
-    /// See `syncDecode(_:)` for the non-streaming, synchronous version.
-    ///
-    ///     let user = req.content.decode(json: User.self, using: JSONDecoder())
-    ///     print(user) // Future<User>
-    ///
-    /// This method accepts a custom `HTTPMessageDecoder`.
-    ///
-    /// - parameters:
-    ///     - content: `Decodable` type to decode from this HTTP message.
-    ///     - maxSize: Maximum streaming body size to support (does not apply to static bodies).
-    ///     - decoder: Custom `HTTPMessageDecoder` to use.
-    /// - returns: Future instance of the `Decodable` type.
-    /// - throws: Any errors making the decoder for this media type or parsing the message.
-    public func decode<D>(_ content: D.Type, maxSize: Int = 65_536, using decoder: HTTPMessageDecoder) throws -> Future<D> where D: Decodable {
-        return try decoder.decode(D.self, from: container.http, maxSize: maxSize, on: container)
+    /// Serialize an ``Encodable`` value to the container as the given ``HTTPMediaType``.
+    public mutating func encode<E: Encodable>(_ encodable: E, as contentType: HTTPMediaType) throws {
+        try self.encode(encodable, using: self.configuredEncoder(for: contentType))
     }
 
-    // MARK: Single Value
-
-    /// Fetches a single `Decodable` value at the supplied key-path from this HTTP message's data.
-    /// This method supports streaming HTTP bodies (chunked) and runs asynchronously.
-    /// See `syncGet(_:at:)` for the streaming version.
-    ///
-    /// Note: This is a non-throwing subscript convenience method for `get(_:at:)`
-    ///
-    ///     let name: Future<String?> = try req.content["user", "name"]
-    ///
-    /// - parameters:
-    ///     - keyPath: One or more key path components to the desired value.
-    /// - returns: Optional decoded `Decodable` value.
-    public subscript<D>(_ keyPath: BasicKeyRepresentable...) -> Future<D?>
-        where D: Decodable
-    {
-        return self[D.self, at: keyPath]
+    // MARK: - Key path helpers
+    
+    /// Legacy alias for ``subscript(_:at:)-90mrm``.
+    public subscript<D: Decodable>(_ path: CodingKeyRepresentable...) -> D? {
+        self[D.self, at: path]
     }
 
-    /// Fetches a single `Decodable` value at the supplied key-path from this HTTP message's data.
-    /// This method supports streaming HTTP bodies (chunked) and runs asynchronously.
-    /// See `syncGet(_:at:)` for the streaming version.
+    /// Fetch a single ``Decodable`` value at the supplied keypath in the container.
     ///
-    /// Note: This is a non-throwing subscript convenience method for `get(_:at:)`
-    ///
-    ///     let name = try req.content[String.self, at: "user", "name"]
-    ///     print(name) // Future<String?>
-    ///
-    /// - parameters:
-    ///     - type: The `Decodable` value type to decode.
-    ///     - keyPath: One or more key path components to the desired value.
-    /// - returns: Optional decoded `Decodable` value.
-    public subscript<D>(_ type: D.Type, at keyPath: BasicKeyRepresentable...) -> Future<D?>
-        where D: Decodable
-    {
-        return self[D.self, at: keyPath]
+    ///     let name: String? = req.content[at: "user", "name"]
+    public subscript<D: Decodable>(_: D.Type = D.self, at path: CodingKeyRepresentable...) -> D? {
+        self[D.self, at: path]
     }
 
-    /// Fetches a single `Decodable` value at the supplied key-path from this HTTP message's data.
-    /// This method supports streaming HTTP bodies (chunked) and runs asynchronously.
-    /// See `syncGet(_:at:)` for the streaming version.
+    /// Fetch a single ``Decodable`` value at the supplied keypath in the container.
     ///
-    /// Note: This is a non-throwing subscript convenience method for `get(_:at:)`. This is the non-variadic version.
+    ///     let name: String? = req.content[at: ["user", "name"]]
+    public subscript<D: Decodable>(_: D.Type = D.self, at path: [CodingKeyRepresentable]) -> D? {
+        try? self.get(D.self, at: path)
+    }
+    
+    /// Fetch a single ``Decodable`` value at the supplied keypath in the container.
     ///
-    ///     let name = try req.content[String.self, at: "user", "name"]
-    ///     print(name) // Future<String?>
+    ///     let name: String = try req.content.get(at: "user", "name")
+    public func get<D: Decodable>(_: D.Type = D.self, at path: CodingKeyRepresentable...) throws -> D {
+        try self.get(at: path)
+    }
+    
+    /// Fetch a single ``Decodable`` value at the supplied keypath in this container.
     ///
-    /// - parameters:
-    ///     - type: The `Decodable` value type to decode.
-    ///     - keyPath: One or more key path components to the desired value.
-    /// - returns: Optional decoded `Decodable` value.
-    public subscript<D>(_ type: D.Type, at keyPath: [BasicKeyRepresentable]) -> Future<D?>
-        where D: Decodable
-    {
-        let promise = container.eventLoop.newPromise(D?.self)
-        get(at: keyPath).do { value in
-            promise.succeed(result: value)
-        }.catch { err in
-            promise.succeed(result: nil)
+    ///     let name = try req.content.get(String.self, at: ["user", "name"])
+    public func get<D: Decodable>(_: D.Type = D.self, at path: [CodingKeyRepresentable]) throws -> D {
+        try self.get(D.self, path: path.map(\.codingKey))
+    }
+    
+    // MARK: - Private
+    
+    /// Execute a "get at coding key path" operation.
+    private func get<D: Decodable>(_: D.Type = D.self, path: [CodingKey]) throws -> D {
+        try self.decode(ContainerGetPathExecutor<D>.self, using: ForwardingContentDecoder(
+            base: self.configuredDecoder(),
+            info: ContainerGetPathExecutor<D>.userInfo(for: path)
+        )).result
+    }
+
+    /// Look up a ``ContentEncoder`` for the supplied ``HTTPMediaType``.
+    private func configuredEncoder(for mediaType: HTTPMediaType) throws -> ContentEncoder {
+        try ContentConfiguration.global.requireEncoder(for: mediaType)
+    }
+    
+    /// Look up a ``ContentDecoder`` for the container's ``contentType``.
+    private func configuredDecoder(for mediaType: HTTPMediaType? = nil) throws -> ContentDecoder {
+        guard let contentType = mediaType ?? self.contentType else {
+            throw Abort(.unsupportedMediaType, reason: "Can't decode data without a content type")
         }
-        return promise.futureResult
+        return try ContentConfiguration.global.requireDecoder(for: contentType)
     }
+}
 
-    /// Fetches a single `Decodable` value at the supplied key-path from this HTTP message's data.
-    /// This method supports streaming HTTP bodies (chunked) and runs asynchronously.
-    /// See `syncGet(_:at:)` for the streaming version.
-    ///
-    ///     let name = try req.content.get(String.self, at: "user", "name")
-    ///     print(name) // Future<String>
-    ///
-    /// - parameters:
-    ///     - type: The `Decodable` value type to decode.
-    ///     - keyPath: One or more key path components to the desired value.
-    ///     - maxSize: Maximum streaming body size to support (does not apply to non-streaming bodies).
-    /// - returns: Future decoded `Decodable` value.
-    public func get<D>(_ type: D.Type = D.self, at keyPath: BasicKeyRepresentable...) -> Future<D>
-        where D: Decodable
-    {
-        return get(at: keyPath)
+/// Injects coder userInfo into a ``ContentDecoder`` so we don't have to add passthroughs to ``ContentContainer``.
+fileprivate struct ForwardingContentDecoder: ContentDecoder {
+    let base: ContentDecoder, info: [CodingUserInfoKey: Any]
+    
+    func decode<D: Decodable>(_: D.Type, from body: ByteBuffer, headers: HTTPHeaders) throws -> D {
+        try self.base.decode(D.self, from: body, headers: headers, userInfo: self.info)
     }
-
-    /// Fetches a single `Decodable` value at the supplied key-path from this HTTP message's data.
-    /// This method supports streaming HTTP bodies (chunked) and runs asynchronously.
-    /// See `syncGet(_:at:)` for the streaming version.
-    ///
-    /// Note: This is the non-variadic version.
-    ///
-    ///     let name = try req.content.get(String.self, at: "user", "name")
-    ///     print(name) // Future<String>
-    ///
-    /// - parameters:
-    ///     - type: The `Decodable` value type to decode.
-    ///     - keyPath: One or more key path components to the desired value.
-    ///     - maxSize: Maximum streaming body size to support (does not apply to non-streaming bodies).
-    /// - returns: Future decoded `Decodable` value.
-    public func get<D>(_ type: D.Type = D.self, at keyPath: [BasicKeyRepresentable], maxSize: Int = 65_536) -> Future<D>
-        where D: Decodable
-    {
-        return Future.flatMap(on: container) {
-            return try self.requireHTTPDecoder().get(at: keyPath.makeBasicKeys(), from: self.container.http, maxSize: maxSize, on: self.container)
-        }
-    }
-
-    // MARK: Sync
-
-    /// Parses a `Decodable` type from this HTTP message. This method does _not_ support streaming HTTP bodies (chunked) and runs synchronously.
-    /// See `decode(_:maxSize:)` for the streaming version.
-    ///
-    ///     let user = try req.content.syncDecode(User.self)
-    ///     print(user) // User
-    ///
-    /// The HTTP message's `MediaType` will be used to lookup the relevant `HTTPBodyDecoder` to use.
-    ///
-    /// - parameters:
-    ///     - content: `Decodable` type to decode from this HTTP message.
-    /// - returns: Instace of the `Decodable` type.
-    /// - throws: Any errors making the decoder for this media type or parsing the message.
-    ///           An error will also be thrown if this HTTP message's body type is streaming.
-    public func syncDecode<D>(_ content: D.Type) throws -> D where D: Decodable {
-        guard let data = container.http.body.data else {
-            throw VaporError(
-                identifier: "syncDecode",
-                reason: "Cannot use sync decode on a streaming body.",
-                suggestedFixes: [
-                    "Use `decode` instead of `syncDecode`."
-                ]
-            )
-        }
-        return try requireDataDecoder().decode(D.self, from: data)
-    }
-
-    /// Fetches a single `Decodable` value at the supplied key-path from this HTTP message's data.
-    /// This method does _not_ support streaming HTTP bodies (chunked) and runs synchronously.
-    /// See `get(_:at:)` for the streaming version.
-    ///
-    ///     let name = try req.content.syncGet(String.self, at: "user", "name")
-    ///     print(name) // String
-    ///
-    /// - parameters:
-    ///     - type: The `Decodable` value type to decode.
-    ///     - keyPath: One or more key path components to the desired value.
-    /// - throws: Any errors making the correct decoder, parsing the value, or if the HTTP body is streaming.
-    /// - returns: Decoded `Decodable` value.
-    public func syncGet<D>(_ type: D.Type = D.self, at keyPath: BasicKeyRepresentable...) throws -> D
-        where D: Decodable
-    {
-        return try syncGet(at: keyPath)
-    }
-
-    /// Fetches a single `Decodable` value at the supplied key-path from this HTTP message's data.
-    /// This method does _not_ support streaming HTTP bodies (chunked) and runs synchronously.
-    /// See `get(_:at:)` for the streaming version.
-    ///
-    /// Note: This is the non-variadic version.
-    ///
-    ///     let name = try req.content.syncGet(String.self, at: "user", "name")
-    ///     print(name) // String
-    ///
-    /// - parameters:
-    ///     - type: The `Decodable` value type to decode.
-    ///     - keyPath: One or more key path components to the desired value.
-    /// - throws: Any errors making the correct decoder, parsing the value, or if the HTTP body is streaming.
-    /// - returns: Decoded `Decodable` value.
-    public func syncGet<D>(_ type: D.Type = D.self, at keyPath: [BasicKeyRepresentable]) throws -> D
-        where D: Decodable
-    {
-        guard let data = container.http.body.data else {
-            throw VaporError(
-                identifier: "syncGet",
-                reason: "Cannot use sync decode on a streaming body.",
-                suggestedFixes: [ "Use `get` instead of `syncGet`."]
-            )
-        }
-        return try requireDataDecoder().get(at: keyPath.makeBasicKeys(), from: data)
-    }
-
-    // MARK: Private
-
-    /// Looks up a `HTTPMessageEncoder` for the supplied `MediaType`.
-    private func requireHTTPEncoder(for mediaType: MediaType) throws -> HTTPMessageEncoder {
-        let coders = try container.make(ContentCoders.self)
-        return try coders.requireHTTPEncoder(for: mediaType)
-    }
-
-    /// Looks up a `HTTPMessageDecoder` for the supplied `MediaType`.
-    private func requireHTTPDecoder() throws -> HTTPMessageDecoder {
-        let coders = try container.make(ContentCoders.self)
-        guard let contentType = container.http.contentType else {
-            throw VaporError(
-                identifier: "contentType",
-                reason: "\(M.self) does not have a content type.",
-                possibleCauses: ["The 'Content-Type' header is not present."]
-            )
-        }
-        return try coders.requireHTTPDecoder(for: contentType)
-    }
-
-    /// Looks up a `DataDecoder` for the supplied `MediaType`.
-    private func requireDataDecoder() throws -> DataDecoder {
-        let coders = try container.make(ContentCoders.self)
-        guard let contentType = container.http.contentType else {
-            throw VaporError(
-                identifier: "mediaType",
-                reason: "\(M.self) does not have a content type.",
-                possibleCauses: ["The 'Content-Type' header is not present."]
-            )
-        }
-        return try coders.requireDataDecoder(for: contentType)
+    func decode<D: Decodable>(_: D.Type, from body: ByteBuffer, headers: HTTPHeaders, userInfo: [CodingUserInfoKey: Any]) throws -> D {
+        try self.base.decode(D.self, from: body, headers: headers, userInfo: userInfo.merging(self.info) { $1 })
     }
 }

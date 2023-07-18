@@ -1,19 +1,42 @@
+import NIOHTTP1
+
 /// Default implementation of `AbortError`. You can use this as a convenient method for throwing
 /// `AbortError`s without having to conform your own error-type to `AbortError`.
 ///
 ///     throw Abort(.badRequest, reason: "Something's not quite right...")
 ///
-public struct Abort: AbortError {
+public struct Abort: AbortError, DebuggableError {
     /// Creates a redirecting `Abort` error.
     ///
     ///     throw Abort.redirect(to: "https://vapor.codes")"
     ///
     /// Set type to '.permanently' to allow caching to automatically redirect from browsers.
     /// Defaulting to non-permanent to prevent unexpected caching.
-    public static func redirect(to location: String, type: RedirectType = .normal) -> Abort {
+    /// - Parameters:
+    ///   - location: The path to redirect to
+    ///   - type: The type of redirect to perform
+    /// - Returns: An abort error that provides a redirect to the specified location
+    @available(*, deprecated, renamed: "redirect(to:redirectType:)")
+    public static func redirect(to location: String, type: RedirectType) -> Abort {
         var headers: HTTPHeaders = [:]
         headers.replaceOrAdd(name: .location, value: location)
         return .init(type.status, headers: headers)
+    }
+    
+    /// Creates a redirecting `Abort` error.
+    ///
+    ///     throw Abort.redirect(to: "https://vapor.codes")
+    ///
+    /// Set type to '.permanently' to allow caching to automatically redirect from browsers.
+    /// Defaulting to non-permanent to prevent unexpected caching.
+    /// - Parameters:
+    ///   - location: The path to redirect to
+    ///   - redirectType: The type of redirect to perform
+    /// - Returns: An abort error that provides a redirect to the specified location
+    public static func redirect(to location: String, redirectType: Redirect = .normal) -> Abort {
+        var headers: HTTPHeaders = [:]
+        headers.replaceOrAdd(name: .location, value: location)
+        return .init(redirectType.status, headers: headers)
     }
 
     /// See `Debuggable`
@@ -28,11 +51,11 @@ public struct Abort: AbortError {
     /// See `AbortError`
     public var reason: String
 
-    /// See `Debuggable`
-    public var sourceLocation: SourceLocation?
+    /// Source location where this error was created.
+    public var source: ErrorSource?
 
-    /// See `Debuggable`
-    public var stackTrace: [String]
+    /// Stack trace at point of error creation.
+    public var stackTrace: StackTrace?
 
     /// Create a new `Abort`, capturing current source location info.
     public init(
@@ -40,16 +63,25 @@ public struct Abort: AbortError {
         headers: HTTPHeaders = [:],
         reason: String? = nil,
         identifier: String? = nil,
-        file: String = #file,
+        suggestedFixes: [String] = [],
+        file: String = #fileID,
         function: String = #function,
         line: UInt = #line,
-        column: UInt = #column
+        column: UInt = #column,
+        range: Range<UInt>? = nil,
+        stackTrace: StackTrace? = .capture(skip: 1)
     ) {
-        self.identifier = status.code.description
+        self.identifier = identifier ?? status.code.description
         self.headers = headers
         self.status = status
         self.reason = reason ?? status.reasonPhrase
-        self.sourceLocation = SourceLocation(file: file, function: function, line: line, column: column, range: nil)
-        self.stackTrace = Abort.makeStackTrace()
+        self.source = ErrorSource(
+            file: file,
+            function: function,
+            line: line,
+            column: column,
+            range: range
+        )
+        self.stackTrace = stackTrace
     }
 }

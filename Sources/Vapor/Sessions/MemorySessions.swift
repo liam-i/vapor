@@ -1,30 +1,60 @@
+import Foundation
+import NIOCore
+
 /// Simple in-memory sessions implementation.
-public final class MemorySessions: Sessions, Service {
-    /// Actual implementation.
-    private let keyedCacheSessions: KeyedCacheSessions
-
-    /// Create a new `MemorySessions` with the supplied cookie factory.
-    public init() {
-        self.keyedCacheSessions = KeyedCacheSessions(keyedCache: MemoryKeyedCache())
+public struct MemorySessions: SessionDriver {
+    public let storage: Storage
+    
+    public final class Storage {
+        public var sessions: [SessionID: SessionData]
+        public let queue: DispatchQueue
+        public init() {
+            self.sessions = [:]
+            self.queue = DispatchQueue(label: "MemorySessions.Storage")
+        }
     }
 
-    /// See `Sessions`.
-    public func createSession(_ session: Session) throws -> Future<Void> {
-        return try keyedCacheSessions.createSession(session)
+    public init(storage: Storage) {
+        self.storage = storage
     }
 
-    /// See `Sessions`.
-    public func readSession(sessionID: String) throws -> Future<Session?> {
-        return try keyedCacheSessions.readSession(sessionID: sessionID)
+    public func createSession(
+        _ data: SessionData,
+        for request: Request
+    ) -> EventLoopFuture<SessionID> {
+        let sessionID = self.generateID()
+        self.storage.queue.sync {
+            self.storage.sessions[sessionID] = data
+        }
+        return request.eventLoop.makeSucceededFuture(sessionID)
     }
-
-    /// See `Sessions`.
-    public func updateSession(_ session: Session) throws -> Future<Void> {
-        return try keyedCacheSessions.updateSession(session)
+    
+    public func readSession(
+        _ sessionID: SessionID,
+        for request: Request
+    ) -> EventLoopFuture<SessionData?> {
+        let session = self.storage.queue.sync { self.storage.sessions[sessionID] }
+        return request.eventLoop.makeSucceededFuture(session)
     }
-
-    /// See `Sessions`.
-    public func destroySession(sessionID: String) throws -> Future<Void> {
-        return try keyedCacheSessions.destroySession(sessionID: sessionID)
+    
+    public func updateSession(
+        _ sessionID: SessionID,
+        to data: SessionData,
+        for request: Request
+    ) -> EventLoopFuture<SessionID> {
+        self.storage.queue.sync { self.storage.sessions[sessionID] = data }
+        return request.eventLoop.makeSucceededFuture(sessionID)
+    }
+    
+    public func deleteSession(
+        _ sessionID: SessionID,
+        for request: Request
+    ) -> EventLoopFuture<Void> {
+        self.storage.queue.sync { self.storage.sessions[sessionID] = nil }
+        return request.eventLoop.makeSucceededFuture(())
+    }
+    
+    private func generateID() -> SessionID {
+        return .init(string: [UInt8].random(count: 32).base64String())
     }
 }

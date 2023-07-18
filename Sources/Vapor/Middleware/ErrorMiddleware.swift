@@ -1,8 +1,16 @@
+import Foundation
+import NIOCore
+import NIOHTTP1
+
 /// Captures all errors and transforms them into an internal server error HTTP response.
-public final class ErrorMiddleware: Middleware, ServiceType {
-    /// See `ServiceType`.
-    public static func makeService(for worker: Container) throws -> ErrorMiddleware {
-        return try .default(environment: worker.environment, log: worker.make())
+public final class ErrorMiddleware: Middleware {
+    /// Structure of `ErrorMiddleware` default response.
+    internal struct ErrorResponse: Codable {
+        /// Always `true` to indicate this is a non-typical JSON response.
+        var error: Bool
+
+        /// The reason for the error.
+        var reason: String
     }
 
     /// Create a default `ErrorMiddleware`. Logs errors to a `Logger` based on `Environment`
@@ -10,21 +18,8 @@ public final class ErrorMiddleware: Middleware, ServiceType {
     ///
     /// - parameters:
     ///     - environment: The environment to respect when presenting errors.
-    ///     - log: Log destination.
-    public static func `default`(environment: Environment, log: Logger) -> ErrorMiddleware {
-        /// Structure of `ErrorMiddleware` default response.
-        struct ErrorResponse: Encodable {
-            /// Always `true` to indicate this is a non-typical JSON response.
-            var error: Bool
-
-            /// The reason for the error.
-            var reason: String
-        }
-
+    public static func `default`(environment: Environment) -> ErrorMiddleware {
         return .init { req, error in
-            // log the error
-            log.report(error: error, verbose: !environment.isRelease)
-
             // variables to determine
             let status: HTTPResponseStatus
             let reason: String
@@ -37,38 +32,32 @@ public final class ErrorMiddleware: Middleware, ServiceType {
                 reason = abort.reason
                 status = abort.status
                 headers = abort.headers
-            case let validation as ValidationError:
-                // this is a validation error
-                reason = validation.reason
-                status = .badRequest
-                headers = [:]
-            case let debuggable as Debuggable where !environment.isRelease:
-                // if not release mode, and error is debuggable, provide debug
-                // info directly to the developer
-                reason = debuggable.reason
-                status = .internalServerError
-                headers = [:]
             default:
-                // not an abort error, and not debuggable or in dev mode
-                // just deliver a generic 500 to avoid exposing any sensitive error info
-                reason = "Something went wrong."
+                // if not release mode, and error is debuggable, provide debug info
+                // otherwise, deliver a generic 500 to avoid exposing any sensitive error info
+                reason = environment.isRelease
+                    ? "Something went wrong."
+                    : String(describing: error)
                 status = .internalServerError
                 headers = [:]
             }
-
+            
+            // Report the error to logger.
+            req.logger.report(error: error)
+            
             // create a Response with appropriate status
-            let res = req.makeResponse(http: .init(status: status, headers: headers))
-
+            let response = Response(status: status, headers: headers)
+            
             // attempt to serialize the error to json
             do {
                 let errorResponse = ErrorResponse(error: true, reason: reason)
-                res.http.body = try HTTPBody(data: JSONEncoder().encode(errorResponse))
-                res.http.headers.replaceOrAdd(name: .contentType, value: "application/json; charset=utf-8")
+                response.body = try .init(data: JSONEncoder().encode(errorResponse), byteBufferAllocator: req.byteBufferAllocator)
+                response.headers.replaceOrAdd(name: .contentType, value: "application/json; charset=utf-8")
             } catch {
-                res.http.body = HTTPBody(string: "Oops: \(error)")
-                res.http.headers.replaceOrAdd(name: .contentType, value: "text/plain; charset=utf-8")
+                response.body = .init(string: "Oops: \(error)", byteBufferAllocator: req.byteBufferAllocator)
+                response.headers.replaceOrAdd(name: .contentType, value: "text/plain; charset=utf-8")
             }
-            return res
+            return response
         }
     }
 
@@ -82,18 +71,10 @@ public final class ErrorMiddleware: Middleware, ServiceType {
     public init(_ closure: @escaping (Request, Error) -> (Response)) {
         self.closure = closure
     }
-
-    /// See `Middleware`.
-    public func respond(to req: Request, chainingTo next: Responder) throws -> Future<Response> {
-        let response: Future<Response>
-        do {
-            response = try next.respond(to: req)
-        } catch {
-            response = req.eventLoop.newFailedFuture(error: error)
-        }
-
-        return response.mapIfError { error in
-            return self.closure(req, error)
+    
+    public func respond(to request: Request, chainingTo next: Responder) -> EventLoopFuture<Response> {
+        return next.respond(to: request).flatMapErrorThrowing { error in
+            return self.closure(request, error)
         }
     }
 }

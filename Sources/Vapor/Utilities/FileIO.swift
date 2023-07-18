@@ -1,41 +1,16 @@
-extension Request {
-    /// Creates a `FileIO` for this `Request`.
-    ///
-    ///     let data = try req.fileio().read(file: "/path/to/file.txt")
-    ///     print(data) // Future<Data>
-    ///
-    /// See `FileIO` for more information.
-    public func fileio() throws -> FileIO {
-        let allocator: ByteBufferAllocator
-        if let channel = http.channel {
-            allocator = channel.allocator
-        } else {
-            debugOnly { WARNING("FileIO: No channel on HTTPRequest. Initializing a new ByteBufferAllocator.") }
-            allocator = .init()
-        }
-        return try .init(io: make(), allocator: allocator, on: self)
-    }
+import Foundation
+import NIOCore
+import NIOHTTP1
+import NIOPosix
+import Logging
 
-    /// If you are simply looking to serve files from your public directory,
-    /// it may be useful to look at 'FileMiddleware' instead.
-    ///
-    /// Use this to initialize a file response for the exact file path.
-    /// If using from a public folder for example, the file name should be appended
-    /// to the public directory, ie: `drop.publicDir + "myFile.cool"`
-    ///
-    /// If none match represents an ETag that will be used to check if the file has
-    /// changed since the last load by the client. This allows clients like browsers
-    /// to cache their files and avoid downloading resources unnecessarily.
-    /// Most often calculated w/
-    /// https://tools.ietf.org/html/rfc7232#section-3.2
-    ///
-    /// For an example of how this is used, look at 'FileMiddleware'.
-    ///
-    /// See `FileIO` for more information.
-    public func streamFile(at path: String) throws -> Future<Response> {
-        let res = makeResponse()
-        res.http = try fileio().chunkedResponse(file: path, for: http)
-        return eventLoop.newSucceededFuture(result: res)
+extension Request {
+    public var fileio: FileIO {
+        return .init(
+            io: self.application.fileio,
+            allocator: self.application.allocator,
+            request: self
+        )
     }
 }
 
@@ -45,36 +20,41 @@ extension Request {
 ///
 /// It can read files, both in their entirety and chunked.
 ///
-///     let data = try req.fileio().read(file: "/path/to/file.txt").wait()
-///     print(data) // file data
+///     let fileio = try c.make(FileIO.self)
 ///
-/// It can also create HTTP chunked streams for use as HTTP bodies.
-///
-///     router.get("file-stream") { req -> HTTPResponse in
-///         let stream = try req.fileio().chunkedStream(file: "/path/to/file.txt")
-///         var res = HTTPResponse(status: .ok, body: stream)
-///         res.contentType = .plainText
-///         return res
+///     fileio.readFile(at: "/path/to/file.txt") { chunk in
+///         print(chunk) // part of file
 ///     }
 ///
-/// Use `Request.fileio()` to create one.
+///     fileio.collectFile(at: "/path/to/file.txt").map { file in
+///         print(file) // entire file
+///     }
+///
+/// It can also create streaming HTTP responses.
+///
+///     let fileio = try c.make(FileIO.self)
+///     router.get("file-stream") { req -> Response in
+///         return fileio.streamFile(at: "/path/to/file.txt", for: req)
+///     }
+///
+/// Streaming file responses respect `E-Tag` headers present in the request.
 public struct FileIO {
     /// Wrapped non-blocking file io from SwiftNIO
     private let io: NonBlockingFileIO
 
     /// ByteBufferAllocator to use for generating buffers.
     private let allocator: ByteBufferAllocator
-
-    /// Event loop for async work.
-    private let eventLoop: EventLoop
+    
+    /// HTTP request context.
+    let request: Request
 
     /// Creates a new `FileIO`.
     ///
     /// See `Request.fileio()` to create one.
-    internal init(io: NonBlockingFileIO, allocator: ByteBufferAllocator, on worker: Worker) {
+    internal init(io: NonBlockingFileIO, allocator: ByteBufferAllocator, request: Request) {
         self.io = io
         self.allocator = allocator
-        self.eventLoop = worker.eventLoop
+        self.request = request
     }
 
     /// Reads the contents of a file at the supplied path.
@@ -83,11 +63,15 @@ public struct FileIO {
     ///     print(data) // file data
     ///
     /// - parameters:
-    ///     - file: Path to file on the disk.
+    ///     - path: Path to file on the disk.
     /// - returns: `Future` containing the file data.
-    public func read(file: String) -> Future<Data> {
-        var data: Data = .init()
-        return readChunked(file: file) { data += $0 }.map { data }
+    public func collectFile(at path: String) -> EventLoopFuture<ByteBuffer> {
+        var data = self.allocator.buffer(capacity: 0)
+        return self.readFile(at: path) { new in
+            var new = new
+            data.writeBuffer(&new)
+            return self.request.eventLoop.makeSucceededFuture(())
+        }.map { data }
     }
 
     /// Reads the contents of a file at the supplied path in chunks.
@@ -97,132 +81,224 @@ public struct FileIO {
     ///     }.wait()
     ///
     /// - parameters:
-    ///     - file: Path to file on the disk.
-    ///     - chunkSize: Maxiumum size for the file data chunks.
+    ///     - path: Path to file on the disk.
+    ///     - chunkSize: Maximum size for the file data chunks.
     ///     - onRead: Closure to be called sequentially for each file data chunk.
     /// - returns: `Future` that will complete when the file read is finished.
-    public func readChunked(file: String, chunkSize: Int = NonBlockingFileIO.defaultChunkSize, onRead: @escaping (Data) -> Void) -> Future<Void> {
-        return _read(file: file, chunkSize: chunkSize) { buffer in
-            let data = buffer.withUnsafeReadableBytes { ptr in
-                return Data(buffer: ptr.bindMemory(to: UInt8.self))
-            }
-            onRead(data)
-            return self.eventLoop.newSucceededFuture(result: ())
+    public func readFile(
+        at path: String,
+        chunkSize: Int = NonBlockingFileIO.defaultChunkSize,
+        onRead: @escaping (ByteBuffer) -> EventLoopFuture<Void>
+    ) -> EventLoopFuture<Void> {
+        guard
+            let attributes = try? FileManager.default.attributesOfItem(atPath: path),
+            let fileSize = attributes[.size] as? NSNumber
+        else {
+            return self.request.eventLoop.makeFailedFuture(Abort(.internalServerError))
         }
+        return self.read(
+            path: path,
+            fromOffset: 0,
+            byteCount:
+            fileSize.intValue,
+            chunkSize: chunkSize,
+            onRead: onRead
+        )
     }
 
-    /// Generates a chunked `HTTPResponse` for the specified file. This method respects values in
+    /// Generates a chunked `Response` for the specified file. This method respects values in
     /// the `"ETag"` header and is capable of responding `304 Not Modified` if the file in question
     /// has not been modified since last served. This method will also set the `"Content-Type"` header
     /// automatically if an appropriate `MediaType` can be found for the file's suffix.
     ///
-    ///     router.get("file-stream") { req -> HTTPResponse in
-    ///         return try req.fileio().chunkedResponse(file: "/path/to/file.txt")
+    ///     router.get("file-stream") { req in
+    ///         return req.fileio.streamFile(at: "/path/to/file.txt")
     ///     }
     ///
     /// - parameters:
-    ///     - file: Path to file on the disk.
-    ///     - req: `HTTPRequest` to parse `"If-None-Match"` header from.
-    ///     - chunkSize: Maxiumum size for the file data chunks.
+    ///     - path: Path to file on the disk.
+    ///     - chunkSize: Maximum size for the file data chunks.
+    ///     - mediaType: HTTPMediaType, if not specified, will be created from file extension.
+    ///     - onCompleted: Closure to be run on completion of stream.
     /// - returns: A `200 OK` response containing the file stream and appropriate headers.
-    public func chunkedResponse(file: String, for req: HTTPRequest, chunkSize: Int = NonBlockingFileIO.defaultChunkSize) -> HTTPResponse {
+    public func streamFile(
+        at path: String,
+        chunkSize: Int = NonBlockingFileIO.defaultChunkSize,
+        mediaType: HTTPMediaType? = nil,
+        onCompleted: @escaping (Result<Void, Error>) -> () = { _ in }
+    ) -> Response {
         // Get file attributes for this file.
         guard
-            let attributes = try? FileManager.default.attributesOfItem(atPath: file),
+            let attributes = try? FileManager.default.attributesOfItem(atPath: path),
             let modifiedAt = attributes[.modificationDate] as? Date,
-            let fileSize = attributes[.size] as? NSNumber
+            let fileSize = (attributes[.size] as? NSNumber)?.intValue
         else {
-            return HTTPResponse(status: .internalServerError)
+            return Response(status: .internalServerError)
         }
 
+        let contentRange: HTTPHeaders.Range?
+        if let rangeFromHeaders = request.headers.range {
+            if rangeFromHeaders.unit == .bytes && rangeFromHeaders.ranges.count == 1 {
+                contentRange = rangeFromHeaders
+            } else {
+                contentRange = nil
+            }
+        } else if request.headers.contains(name: .range) {
+            // Range header was supplied but could not be parsed i.e. it was invalid
+            request.logger.debug("Range header was provided in request but was invalid")
+            let response = Response(status: .badRequest)
+            return response
+        } else {
+            contentRange = nil
+        }
         // Create empty headers array.
         var headers: HTTPHeaders = [:]
 
+        // Respond with lastModified header
+        headers.lastModified = HTTPHeaders.LastModified(value: modifiedAt)
+        
         // Generate ETag value, "HEX value of last modified date" + "-" + "file size"
-        let fileETag = "\(modifiedAt.timeIntervalSince1970)-\(fileSize.intValue)"
+        let fileETag = "\"\(modifiedAt.timeIntervalSince1970)-\(fileSize)\""
         headers.replaceOrAdd(name: .eTag, value: fileETag)
 
         // Check if file has been cached already and return NotModified response if the etags match
-        if fileETag == req.headers.firstValue(name: .ifNoneMatch) {
-            return HTTPResponse(status: .notModified)
+        if fileETag == request.headers.first(name: .ifNoneMatch) {
+            // Per RFC 9110 here: https://www.rfc-editor.org/rfc/rfc9110.html#status.304
+            // and here: https://www.rfc-editor.org/rfc/rfc9110.html#name-content-encoding
+            // A 304 response MUST include the ETag header and a Content-Length header matching what the original resource's content length would have been were this a 200 response.
+            headers.replaceOrAdd(name: .contentLength, value: fileSize.description)
+            return Response(status: .notModified, version: .http1_1, headersNoUpdate: headers, body: .empty)
         }
 
         // Create the HTTP response.
-        var res = HTTPResponse(status: .ok, headers: headers)
-
+        let response = Response(status: .ok, headers: headers)
+        let offset: Int64
+        let byteCount: Int
+        if let contentRange = contentRange {
+            response.status = .partialContent
+            response.headers.add(name: .accept, value: contentRange.unit.serialize())
+            if let firstRange = contentRange.ranges.first {
+                do {
+                    let range = try firstRange.asResponseContentRange(limit: fileSize)
+                    response.headers.contentRange = HTTPHeaders.ContentRange(unit: contentRange.unit, range: range)
+                    (offset, byteCount) = try firstRange.asByteBufferBounds(withMaxSize: fileSize, logger: request.logger)
+                } catch {
+                    let response = Response(status: .badRequest)
+                    return response
+                }
+            } else {
+                offset = 0
+                byteCount = fileSize
+            }
+        } else {
+            offset = 0
+            byteCount = fileSize
+        }
         // Set Content-Type header based on the media type
         // Only set Content-Type if file not modified and returned above.
         if
-            let fileExtension = file.components(separatedBy: ".").last,
-            let type = MediaType.fileExtension(fileExtension)
+            let fileExtension = path.components(separatedBy: ".").last,
+            let type = mediaType ?? HTTPMediaType.fileExtension(fileExtension)
         {
-            res.contentType = type
+            response.headers.contentType = type
         }
-
-        res.body = chunkedStream(file: file).convertToHTTPBody()
-        return res
-    }
-
-    /// Reads the contents of a file at the supplied path into an `HTTPChunkedStream`.
-    ///
-    ///     router.get("file-stream") { req -> HTTPResponse in
-    ///         let stream = try req.fileio().chunkedStream(file: "/path/to/file.txt")
-    ///         var res = HTTPResponse(status: .ok, body: stream)
-    ///         res.contentType = .plainText
-    ///         return res
-    ///     }
-    ///
-    /// - parameters:
-    ///     - file: Path to file on the disk.
-    ///     - chunkSize: Maxiumum size for the file data chunks.
-    /// - returns: An `HTTPChunkedStream` containing the file stream.
-    public func chunkedStream(file: String, chunkSize: Int = NonBlockingFileIO.defaultChunkSize) -> HTTPChunkedStream {
-        let chunkStream = HTTPChunkedStream(on: eventLoop)
-        _read(file: file, chunkSize: chunkSize) { chunk in
-            return chunkStream.write(.chunk(chunk))
-        }.flatMap {
-            return chunkStream.write(.end)
-        }.catch { error in
-            // we can't wait for the error
-            _ = chunkStream.write(.error(error))
-        }
-        return chunkStream
+        response.body = .init(stream: { stream in
+            self.read(path: path, fromOffset: offset, byteCount: byteCount, chunkSize: chunkSize) { chunk in
+                return stream.write(.buffer(chunk))
+            }.whenComplete { result in
+                switch result {
+                case .failure(let error):
+                    stream.write(.error(error), promise: nil)
+                case .success:
+                    stream.write(.end, promise: nil)
+                }
+                onCompleted(result)
+            }
+        }, count: byteCount, byteBufferAllocator: request.byteBufferAllocator)
+        
+        return response
     }
 
     /// Private read method. `onRead` closure uses ByteBuffer and expects future return.
     /// There may be use in publicizing this in the future for reads that must be async.
-    private func _read(file: String, chunkSize: Int = NonBlockingFileIO.defaultChunkSize, onRead: @escaping (ByteBuffer) -> Future<Void>) -> Future<Void> {
+    private func read(
+        path: String,
+        fromOffset offset: Int64,
+        byteCount: Int,
+        chunkSize: Int,
+        onRead: @escaping (ByteBuffer) -> EventLoopFuture<Void>
+    ) -> EventLoopFuture<Void> {
         do {
-            guard let attributes = try? FileManager.default.attributesOfItem(atPath: file), let fileSize = attributes[.size] as? NSNumber else {
-                throw VaporError(identifier: "fileSize", reason: "Could not determine file size of: \(file).")
-            }
-
-            let fd = try FileHandle(path: file)
-            return io.readChunked(fileHandle: fd, byteCount: fileSize.intValue, chunkSize: chunkSize, allocator: allocator, eventLoop: eventLoop) { chunk in
+            let fd = try NIOFileHandle(path: path)
+            let done = self.io.readChunked(
+                fileHandle: fd,
+                fromOffset: offset,
+                byteCount: byteCount,
+                chunkSize: chunkSize,
+                allocator: allocator,
+                eventLoop: self.request.eventLoop
+            ) { chunk in
                 return onRead(chunk)
-            }.always {
+            }
+            done.whenComplete { _ in
                 try? fd.close()
             }
+            return done
         } catch {
-            return eventLoop.newFailedFuture(error: error)
+            return self.request.eventLoop.makeFailedFuture(error)
+        }
+    }
+    
+    /// Write the contents of buffer to a file at the supplied path.
+    ///
+    ///     let data = ByteBuffer(string: "ByteBuffer")
+    ///     try req.fileio.writeFile(data, at: "/path/to/file.txt").wait()
+    ///
+    /// - parameters:
+    ///     - path: Path to file on the disk.
+    ///     - buffer: The `ByteBuffer` to write.
+    /// - returns: `Future` that will complete when the file write is finished.
+    public func writeFile(_ buffer: ByteBuffer, at path: String) -> EventLoopFuture<Void> {
+        do {
+            let fd = try NIOFileHandle(path: path, mode: .write, flags: .allowFileCreation())
+            let done = io.write(fileHandle: fd, buffer: buffer, eventLoop: self.request.eventLoop)
+            done.whenComplete { _ in
+                try? fd.close()
+            }
+            return done
+        } catch {
+            return self.request.eventLoop.makeFailedFuture(error)
         }
     }
 }
 
-// MARK: Service
-
-extension NonBlockingFileIO: ServiceType {
-    /// See `ServiceType`.
-    public static func makeService(for container: Container) throws -> NonBlockingFileIO {
-        return try NonBlockingFileIO(threadPool: container.make())
-    }
-}
-
-extension BlockingIOThreadPool: ServiceType {
-    /// See `ServiceType`.
-    public static func makeService(for worker: Container) throws -> BlockingIOThreadPool {
-        let pool = BlockingIOThreadPool(numberOfThreads: 2)
-        pool.start()
-        return pool
+extension HTTPHeaders.Range.Value {
+    
+    fileprivate func asByteBufferBounds(withMaxSize size: Int, logger: Logger) throws -> (offset: Int64, byteCount: Int) {
+        switch self {
+            case .start(let value):
+                guard value <= size, value >= 0 else {
+                    logger.debug("Requested range start was invalid: \(value)")
+                    throw Abort(.badRequest)
+                }
+                return (offset: numericCast(value), byteCount: size - value)
+            case .tail(let value):
+                guard value <= size, value >= 0 else {
+                    logger.debug("Requested range end was invalid: \(value)")
+                    throw Abort(.badRequest)
+                }
+                return (offset: numericCast(size - value), byteCount: value)
+            case .within(let start, let end):
+                guard start >= 0, end >= 0, start <= end, start <= size, end <= size else {
+                    logger.debug("Requested range was invalid: \(start)-\(end)")
+                    throw Abort(.badRequest)
+                }
+                let (byteCount, overflow) =  (end - start).addingReportingOverflow(1)
+                guard !overflow else {
+                    logger.debug("Requested range was invalid: \(start)-\(end)")
+                    throw Abort(.badRequest)
+                }
+                return (offset: numericCast(start), byteCount: byteCount)
+        }
     }
 }
